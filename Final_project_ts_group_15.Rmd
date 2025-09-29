@@ -1,0 +1,1222 @@
+---
+title: "Time series: Final Project"
+author: 
+- Matteo Almici (3132333), Federico Golonia (3128604)\newline 
+- Michele Strazza (3112839), Matteo Valetto (3136576)
+header-includes:
+- \usepackage{floatrow}
+- \usepackage{amsmath}
+- \usepackage{amssymb}
+- \usepackage{booktabs}
+- \usepackage{caption}
+- \usepackage{subcaption}
+- \usepackage{hyperref}
+output:
+  pdf_document:
+    fig_caption: yes
+    extra_dependencies: ["float"]
+  html_document:
+    df_print: paged
+---
+```{r,echo=FALSE, message=FALSE, warning=FALSE, out.width='50%'}
+
+#BEFORE RUNNING
+#Indicate the directory path leading to the csv file, ts_epa_2020_west_sept_fill.csv. Please replace in "INSERT PATH HERE".
+data <- read.csv("~/Desktop/ESS/2° semestre/Time series/ts_epa_2020_west_sept_fill.csv")
+
+```
+   
+```{r,echo=FALSE, message=FALSE, warning=FALSE, out.width='50%'}
+set.seed(2020)
+
+#libraries
+library(cowplot)
+library(sf)  
+library(depmixS4)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(ggrepel)
+library(ggplot2)
+library(knitr)
+library(lubridate)
+library(imputeTS)
+library(scales)
+library(patchwork)
+library(zoo)
+library(mvtsplot)
+library(geodist)
+library(kableExtra)
+library(xtable)
+library(gridExtra)
+library(tidyverse)
+library(reshape2)
+library(astsa) 
+library(forecast)
+library(sf)
+library(dlm)
+library(geosphere)
+library(ggmap)
+library(patchwork)
+library(grid)
+library(gtable)
+library(xtable)
+theme_set(theme_minimal())
+```
+
+
+   
+### 1. Motivation
+
+Air pollution is a significant issue that seriously impacts human health. In the past decades extensive studies have been carried out to detail how individuals are affected by it and more widely, the issues it generates. The most commonly monitored categories of particulate matter are ${PM}_{2.5}$ and ${PM}_{10}$ (particulate matter of diameter 2.5 and 10 micrometer or less, respectively). When concentrations of these particles exceed established safety thresholds, they pose significant health risks and are considered hazardous. The aim of our work is to model the dynamics of air pollution, using measures of air quality, in order to provide a valid statistical analysis and useful insights on this issue to politicians, helping them in the decision making process when it comes to making policies and suggesting some positive behavioral changes to the citizens.
+
+
+### 2. Data Description
+
+For the aforementioned purpose, we exploit hourly air quality data from the U.S. Environmental Protection Agency (EPA). In particular, we collect information about 10 stations located along the U.S. West Coast over a period from June to September 2020, including the wildfire season. The final dataset contains several variables, including the spatial coordinates of the EPA station (Longitude and Latitude), the timestamp, air temperature in Celsius, wind speed in knots/second, station identifier and, most importantly, ${PM}_{2.5}$ per cubic meter. Notice that the suggested limit of ${PM}_{2.5}$ is 25 micrograms per cubic meter (average over 24 hours). Over this limit it is considered to be dangerous to human health. 
+
+\bigskip
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+
+data$datetime <- as.POSIXct(data$datetime, format = "%Y-%m-%dT%H:%M:%SZ")
+
+station_96 <- data %>% dplyr::filter(station_id == 96)
+station_41 <- data %>% dplyr::filter(station_id == 41)
+station_47 <- data %>% dplyr::filter(station_id == 47)
+station_99 <- data %>% dplyr::filter(station_id == 99)
+
+
+timeseries_temp_96 <- ts(station_96$temp, start = c(year(min(station_96$datetime)), month(min(station_96$datetime))), frequency = 24)
+timeseries_wind_96 <- ts(station_96$wind, start = c(year(min(station_96$datetime)), month(min(station_96$datetime))), frequency = 24)
+timeseries_pm25_96 <- ts(station_96$pm25, start = c(year(min(station_96$datetime)), month(min(station_96$datetime))), frequency = 24)
+
+summary_temp_96 <- summary(timeseries_temp_96)
+summary_wind_96 <- summary(timeseries_wind_96)
+summary_pm25_96 <- summary(timeseries_pm25_96)
+```
+\newfloatcommand{btabbox}{table}
+\floatsetup{heightadjust=object}
+\begin{figure}[H]
+  \begin{floatrow}
+    \ffigbox{%
+    ```{r,fig.align = "center", echo = FALSE, message=FALSE, warning=FALSE}
+    # Plot histogram station 96
+pm25_values <- as.numeric(timeseries_pm25_96)
+breaks <- seq(0, 120, by = 5)
+histogram <- hist(pm25_values, breaks = breaks, xlab = "", ylab = "Frequency", col = ifelse(breaks >= 25, "red", "skyblue"),main="")
+abline(v = 25, col = "black", lwd = 2, lty = 2)
+text(x = 25, y = max(histogram$counts), labels = "Dangerous PM2.5 level", pos = 4, col = "black")
+    ```
+    }{\caption{${PM}_{2.5}$ histogram of station 96}}
+
+    \btabbox{%
+    ```{r, fig.align = "center", echo = FALSE, message=FALSE, warning=FALSE}
+  # Table with descriptive statistics
+idat <- data.frame(
+  PM25 = timeseries_pm25_96,
+  Temperature = timeseries_temp_96,
+  Wind = timeseries_wind_96
+)
+
+sumidat <- sapply(idat, function(x) summary(c(x, NA)))
+sumidat[dim(sumidat)[1], ] <- sumidat[dim(sumidat)[1], ] - 1 
+
+knitr::kable(head(sumidat,-1), digits=2, format='latex', booktabs = TRUE, linesep = "")
+
+    ```
+  }{\caption{Summary statistics of station 96}}
+  \end{floatrow}
+\end{figure}
+
+In this first section, we are going to focus on station 96. First, we provide relevant summary statistics in Table 1 about ${PM}_{2.5}$, wind speed, and air temperature. The ${PM}_{2.5}$ data series presents some interesting characteristics. The mean value is 15.71, while the median value is slightly higher at 17.92. This is a positive aspect as both values are under the safety threshold of 25. We also observe a wide range between the minimum and maximum values, with the minimum at 10.51 and the maximum being significantly higher at 117.11.
+
+Our distributional results are visually confirmed by Figure 1. The majority of the measurements are smaller than the prescribed limit, although there are some concentration spikes. For instance ${PM}_{2.5}$'s most pronounced peak was registered in September and most likely corresponds to the "Orange Skies Day", which took place in the San Francisco Bay Area. September 9, 2020 was marked by unusual orange-hued skies, a result of the smoke and ash from over 20 different wildfires scorched near the San Francisco Bay Area, causing air quality to worsen significantly.
+
+In order to evaluate how other variables in the data set interact with air pollution, we conduct the analysis of cross-correlation between environmental factors and ${PM}_{2.5}$ concentration levels. 
+Interestingly, temperature shows the highest correlation with ${PM}_{2.5}$ levels at a lag of -16 hours (16 hours prior) with a correlation coefficient of 0.17. This indicates a relatively low but existing relationship and, specifically, that the temperature from 16 hours before is correlated to the current levels of ${PM}_{2.5}$.
+The same considerations hold for wind. The highest wind correlation is observed with a lag of -6 hours (6 hours before) and the specific value of the coefficient is about 0.13.
+These cross-correlation findings suggest that both temperature and wind speed from previous hours have an influence on current ${PM}_{2.5}$ concentrations, although the these relationship are not particularly strong.
+\bigskip
+
+```{r,echo=FALSE,fig.height=6,fig.width=17 , message=FALSE, warning=FALSE, out.width='80%', fig.cap="Cross-correlation of ${PM}_{2.5}$ with temperature (left) and wind (right)",include=FALSE}
+
+
+#Correlation between PM25 with temperature and wind
+ccf_temp <- ccf(timeseries_temp_96, timeseries_pm25_96, plot = FALSE)
+ccf_wind <- ccf(timeseries_wind_96, timeseries_pm25_96, plot = FALSE)
+
+ylim_max <- max(max(ccf_temp$acf), max(ccf_wind$acf))
+ylim_min <- min(min(ccf_temp$acf), min(ccf_wind$acf))
+
+valori_x <- seq(-10, 10, by = 0.5)
+plot_temp <- autoplot(ccf_temp, lags = TRUE) +scale_x_continuous(breaks = valori_x)+
+             coord_cartesian(ylim = c(ylim_min, ylim_max))+ggtitle(NULL)
+plot_wind <- autoplot(ccf_wind, lags = TRUE)  +scale_x_continuous(breaks = valori_x)+
+             coord_cartesian(ylim = c(ylim_min, ylim_max))+ggtitle(NULL)
+
+
+# Arrange plots in a grid
+combined_plot <- cowplot::plot_grid(plot_temp, plot_wind , ncol = 2, rel_widths = c(1.5, 1.5))
+combined_plot
+
+
+
+```
+
+### 3. HMM Model Specification
+We now turn to model specification, using data coming from station 96. Figure 2 renders explicit what we previously discussed, showing that the majority of the measurements of ${PM}_{2.5}$ take values smaller than the prescribed limit. To get a better understanding of the underlying process we decided to manipulate the data implementing a 24-hours moving average (given that the critical ${PM}_{2.5}$ is calculated over a 24 hours mean). The MA model can provide interesting insights as it smooths out random shocks which are exogenous and thus should not play an important role in the state identification.
+\medskip
+```{r,echo=FALSE,fig.align='center',fig.height=4.5,fig.width=15, fig.cap="${PM}_{2.5}$ Levels on Station 96, Hourly Data (left) and Moving Average (right)",warning=FALSE}
+
+
+station_96 <- data %>% dplyr::filter(station_id == 96)
+station_96$datetime <- as.POSIXct(station_96$datetime)
+
+#Graph of station 96 observations
+graph1<-station_96 %>% 
+  ggplot() +
+  geom_rect(data=data.frame(xmin=min(station_96$datetime), xmax=max(station_96$datetime), ymin=25, ymax=120),
+            aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), fill="darkred", alpha=.2) +
+  annotate(geom="text", x=as.POSIXct("2020-06-25 23:00:00 UTC"), y=28, label=as.character(expression("Dangerous PM"[2.5]*" level")), parse=TRUE, color="darkred") +
+  geom_line(data=station_96, aes(x=datetime, y=pm25)) + 
+  geom_hline(yintercept=25, color="darkred") + 
+  scale_x_datetime(expand=c(0,0)) + ylab(expression(PM[2.5])) +
+  scale_y_continuous(expand=c(0,0)) +
+  labs(x=NULL)+theme(axis.title=element_text(size=20),axis.text=element_text(size=15))+theme_bw()+ ggtitle("")
+
+ 
+station_96$pm25MA <- rollmean(station_96$pm25, 24,na.pad=TRUE, align="right")
+
+#Graph of station 96 MA(24) observations 
+graph2<-station_96 %>% 
+  ggplot() +
+  geom_rect(data=data.frame(xmin=min(station_96$datetime), xmax=max(station_96$datetime), ymin=25, ymax=65),
+            aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), fill="darkred", alpha=.2) +
+  annotate(geom="text", x=as.POSIXct("2020-06-25 23:00:00 UTC"), y=26, label=as.character(expression("Dangerous PM"[2.5]*" level")), parse=TRUE, color="darkred") +
+  geom_line(data=station_96, aes(x=datetime, y=pm25MA)) + 
+  geom_hline(yintercept=25, color="darkred") + 
+  scale_x_datetime(expand=c(0,0)) + ylab(NULL) +
+  scale_y_continuous(expand=c(0,0)) +
+  labs(x=NULL)+theme(axis.title=element_text(size=20),axis.text=element_text(size=15))+theme_bw() +
+  ggtitle("")
+
+
+grid.arrange(graph1,graph2, ncol=2)
+
+
+```
+
+To analyze our data we decided to implement a Hidden Markov Model (HMM) to help identify the different levels of pollution and their instability through the states that the HMM will estimate. Following the consideration above, we will model both the hourly data and the 24 hours moving average. The crucial choice for modeling well the data using the HMM is the one related to the number of states which we will use to tune the model. Observing the time series, we see that in both cases (hourly and MA data) the majority of data seems to fluctuate around a common low mean value with relatively low variance and, especially starting from the end of August, we see the observations change level and seem increasingly volatile around a new higher mean. Another possibility which seemed consistent with the data observed was that of a third intermediate state to address the shocks that we observe throughout the time series between June and August, allowing for the top state to fit better the huge spikes observed in September. Given the uncertainty we faced for the choice of the number of states, we decided to proceed with an $empirical~~approach$ fitting two models with different number of states and then evaluating the estimates produced to choose the most promising one. Thus the model looks as below.
+\medskip
+$$Y_{t;k}|S_{t;k}={i} \overset{indep}\sim N(\mu_{i,k}, \sigma^2_{i,k}) $$
+$$\textrm{where } \{S_{t,k}\} \textrm{ is an unobservable Markov chain and}$$
+$$i = \{\textrm{high},\textrm{medium},\textrm{low}\}~~or~~\{\textrm{high},\textrm{low}\} ~~~~~~  k = \{ \textrm{Hourly Data}, \textrm{Moving Average} \}$$
+\bigskip
+
+### 4. HMM Model Fitting
+The following are the estimates for the model with the two states and the emission parameters for the one with three states. The comparison suggests to choose the process with 2 states as it is the most accurate for the data. Indeed, the 3-states-model estimates mean values for the low and medium state are close to each other (see Tables 4 and 6) suggesting overfitting issue, whereas the 2-state model seems to "group" the two lower states and estimates the higher state with a greater value than the other model specification. Finally, we also observe that the standard errors of the 2-states specification dominate the 3-states ones as testified by the narrower confidence intervals.
+```{r,echo=FALSE, message=FALSE, warning=FALSE, out.width='50%', results='hide'}
+#hourly HMM with 2 states
+y <- as.numeric(station_96$pm25)
+model <- depmix(y ~ 1, data = data.frame(y), nstates = 2)  # Set n states to 2
+set.seed(5)
+fmodel <- fit(model)
+
+# Transition matrix
+trans_matrix = matrix(getpars(fmodel)[3:6], ncol = 2, byrow = TRUE, 
+                      dimnames = list(c("from High State", "from Low State"),
+                                      c("to High", "to Low")))
+
+MLEse <- standardError(fmodel)
+MLEse$n <- as.numeric(rownames(MLEse))
+
+Conf_int <- confint(fmodel)
+Conf_int$n <- as.numeric(rownames(MLEse))
+
+# Table with both standard errors and confidence intervals
+MLEtable <- MLEse %>% left_join(Conf_int)
+
+# Parameters of our 2 states
+Parameters <- data.frame(subset(MLEtable, n >= 7, select = -c(constr, n)))
+lunghezza_nomi_righe <- length(c("High State ($\\mu_1$)", "High State ($\\sigma_1$)", "Low State ($\\mu_2$)", "Low State ($\\sigma_2$)"))
+
+rownames(Parameters) <- c("High State ($\\mu_1$)", "High State ($\\sigma_1$)",
+                          "Low State ($\\mu_2$)", "Low State ($\\sigma_2$)")
+colnames(Parameters) <- c("par", "se", "2.5\\%", "97.5\\%")
+
+
+```
+
+```{r,warning=FALSE,echo=FALSE,message=FALSE, results='hide'}
+#Moving Average 24 HMM with 2 staes
+
+c <- as.numeric(station_96$pm25MA)
+modelMA <- depmix(c ~ 1, data = station_96, nstates = 2)  # Set number states at 2
+set.seed(1239812)
+fmodelMA <- fit(modelMA)
+
+
+trans_matrix_MA <- matrix(getpars(fmodelMA)[3:6], ncol = 2, byrow = TRUE, 
+                          dimnames = list(c("from High State", "from Low State"),
+                                          c("to High", "to Low")))
+row.names(trans_matrix_MA) <- NULL
+
+MLEseMA <- standardError(fmodelMA)
+MLEseMA$n <- as.numeric(rownames(MLEseMA))
+
+Conf_intMA <- confint(fmodelMA)
+Conf_intMA$n <- as.numeric(rownames(MLEseMA))
+
+MLEtableMA <- MLEseMA %>% left_join(Conf_intMA)
+
+# Parameter table 2 states
+ParametersMA <- data.frame(subset(MLEtableMA, n >= 7, select = -c(constr, n)))
+rownames(ParametersMA) <- c("High State  ($\\mu_1$)", "High State  ($\\sigma_1$)",
+                             "Low State  ($\\mu_2$)", "Low State ($\\sigma_2$)")
+colnames(ParametersMA) <- c("par", "se", "2.5\\%", "97.5\\%")
+
+```
+
+```{r, out.width='30%', results='asis',warning=FALSE,echo=FALSE,message=FALSE}
+#transition matrices for the hourly and ma models with 2 states
+t1 <- kable(trans_matrix, format='latex', booktabs = T,linesep = "", digits=3)
+t2 <- kable(trans_matrix_MA, format='latex', booktabs = T,linesep = "", digits = 3)
+
+cat(c("\\begin{table}[!htb]
+    \\RawFloats
+    \\begin{minipage}{.5\\linewidth}
+      \\centering
+    \\caption{Transition matrix - Hourly Data}",
+        t1,
+    "
+    \\end{minipage}%
+    \\begin{minipage}{.5\\linewidth}
+      \\centering
+      \\caption{Moving Average}
+        ",
+        t2,
+    "
+    \\end{minipage} 
+\\end{table}"
+))  
+```
+
+```{r, out.width='30%', results='asis',warning=FALSE,echo=FALSE,message=FALSE}
+#tables of emission parameters for hourly and ma model with 2 states
+t3 <- kable(Parameters, format='latex', booktabs = T,linesep = "", digits=3, escape=F)
+t4 <- kable(ParametersMA, format='latex', booktabs = T,linesep = "", digits = 3, escape=F,row.names = FALSE)
+
+cat(c("\\begin{table}[!htb]
+    \\RawFloats
+    \\begin{minipage}{.5\\linewidth}
+      \\centering
+    \\caption{State parameters - Hourly Data}",
+        t3,
+    "
+    \\end{minipage}%
+    \\begin{minipage}{.5\\linewidth}
+      \\centering
+      \\caption{Moving Average}
+        ",
+        t4,
+    "
+    \\end{minipage} 
+\\end{table}"
+)) 
+```
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE, out.width='50%', results='hide'}
+#We repeat everything using 3 states
+#starting from the hourly model with 3 states
+y_3 <- as.numeric(station_96$pm25)
+model_3 <- depmix(y ~ 1, data = data.frame(y), nstates = 3,verbose=FALSE)
+set.seed(5)
+fmodel_3 <- fit(model_3, verbose=FALSE)
+
+# transition matrix
+trans_prob_3 <- matrix(getpars(fmodel_3)[4:12],ncol=3,byrow=TRUE)
+trans_prob_3_ordered <- trans_prob_3
+trans_prob_3_ordered[2,] <- trans_prob_3[3,]
+trans_prob_3_ordered[3,] <- trans_prob_3[2,]
+trans_prob_3_ordered_df <- as.data.frame(trans_prob_3_ordered)
+colnames(trans_prob_3_ordered_df) <-  c("to High", "to Medium", "to Low")
+rownames(trans_prob_3_ordered_df) <- c("from High State", "from Medium State", "from Low State")
+
+#Standard errors
+MLEse_3=standardError(fmodel_3)
+MLEse_3$n = as.numeric(rownames(MLEse_3))
+
+#Confidence interval
+Conf_int_3 = confint(fmodel_3)
+Conf_int_3$n = as.numeric(rownames(MLEse_3))
+
+#Table with both standard errors and confidence intervals
+MLEtable_3 = MLEse_3 %>% left_join(Conf_int_3)
+
+
+#Printed as a table just the parameters of our 3 states
+
+Parameters_3 <- data.frame(subset(MLEtable_3,n>=13, select = -c(constr,n)))
+#Formatting the table putting the medium state before the low state
+Parameters_3_final <- Parameters_3
+Parameters_3_final[3,] <- Parameters_3[5,]
+Parameters_3_final[5,] <- Parameters_3[3,]
+Parameters_3_final[4,] <- Parameters_3[6,]
+Parameters_3_final[6,] <- Parameters_3[4,]
+
+
+rownames(Parameters_3_final)=c("High State  ($\\mu_1$)","High State ($\\sigma_1$)", "Medium State ($\\mu_2$)", "Medium State ($\\sigma_2$)", "Low State ($\\mu_3$)", "Low State ($\\sigma_3$)")
+colnames(Parameters_3_final)=c("par","se","2.5\\%","97.5\\%")
+
+
+
+```
+
+
+```{r,warning=FALSE,echo=FALSE,message=FALSE, results='hide'}
+#Moving Average 24 HMM with 3 states
+
+modelMA_3 <- depmix(pm25MA ~ 1, data=station_96, nstates=3)
+set.seed(1239812)
+fmodelMA_3 <- fit(modelMA_3)
+
+
+trans_prob_MA_3 <- matrix(getpars(fmodelMA_3)[4:12],ncol=3,byrow=TRUE)
+trans_prob_ordered_MA_3 <- trans_prob_MA_3
+trans_prob_ordered_MA_3[2,] <- trans_prob_MA_3[3,]
+trans_prob_ordered_MA_3[3,] <- trans_prob_MA_3[2,]
+trans_prob_ordered_MA_3_df <- as.data.frame(trans_prob_ordered_MA_3)
+colnames(trans_prob_ordered_MA_3_df) <-  c("to High", "to Medium", "to Low")
+rownames(trans_prob_ordered_MA_3_df) <- NULL
+
+
+MLEseMA_3=standardError(fmodelMA_3)
+MLEseMA_3$n = as.numeric(rownames(MLEseMA_3))
+
+Conf_intMA_3 = confint(fmodelMA_3)
+Conf_intMA_3$n = as.numeric(rownames(MLEseMA_3))
+
+MLEtableMA_3 = MLEseMA_3 %>% left_join(Conf_intMA_3)
+
+#Table with parameters of 3 states
+ParametersMA_3 <- data.frame(subset(MLEtableMA_3,n>=13, select = -c(constr,n)))
+#Formatting the table putting the medium state before the low state
+ParametersMA_3_final <- ParametersMA_3
+ParametersMA_3_final[3,] <- ParametersMA_3[5,]
+ParametersMA_3_final[5,] <- ParametersMA_3[3,]
+ParametersMA_3_final[4,] <- ParametersMA_3[6,]
+ParametersMA_3_final[6,] <- ParametersMA_3[4,]
+
+rownames(ParametersMA_3_final)=c("High State ($\\mu_1$)","High State ($\\sigma_1$)", "Medium State  ($\\mu_3$)", "Medium State ($\\sigma_3$)",  "Low State ($\\mu_2$)", "Low State ($\\sigma_2$)")
+colnames(ParametersMA_3_final)=c("par","se","2.5\\%","97.5\\%")
+row.names(ParametersMA_3_final)=NULL
+
+```
+
+
+```{r, out.width='30%', results='asis',warning=FALSE,echo=FALSE,message=FALSE}
+#emission parameters table for 3 states model (hourly and ma)
+t3_3 <- kable(Parameters_3_final, format = 'latex', booktabs = TRUE, linesep = "", digits = 3, escape = FALSE)
+t4_3 <- kable(ParametersMA_3_final, format = 'latex', booktabs = TRUE, linesep = "", digits = 3, escape = FALSE, row.names = FALSE)
+
+cat("\\begin{table}[!htb]
+    \\RawFloats
+    \\begin{minipage}{.5\\linewidth}
+      \\centering
+    \\caption{State parameters - Hourly Data (3 states)}",
+        t3_3,
+    "\\end{minipage}%
+    \\begin{minipage}{.5\\linewidth}
+      \\centering
+      \\caption{Moving Average (3 states)}",
+        t4_3,
+    "\\end{minipage} 
+\\end{table}"
+)        
+ 
+```
+\medskip
+
+Having determined the preferred specification (2 states), we now highlight the most interesting insights for our analysis. Both models (Hourly and MA) display a more stable Low state (see Tables 2 and 3), meaning that the transition probability from Low to Low is higher than the one from High to High. Moreover, in both models, the High state is significantly more volatile than the Low one (see Tables 4 and 5) which can be explained by it fitting the high peaks observed in the time series.
+
+As for the differences between the models, the MA one is characterized by a higher state stability. For what concerns the emission estimates, the MA estimated mean for the High state is lower than the one using the Hourly data, meanwhile for the Low state it is the other way around. Notably, the MA estimates for the state variances are lower for both states. This is in line with our expectations as, taking the moving average of observations over the time period will make the peaks less pronounced, lowering the estimate for the high state as well as the variance estimate.
+
+```{r, echo=FALSE, fig.height=5, fig.width=15, fig.cap="Higher order transition probabilities - Hourly data (left) and Moving Average (right)", warning=FALSE, message=FALSE}
+# Function to compute higher order transition probabilities
+calc_transition_prob <- function(trans_matrix, from_state, to_state, m) {
+  state_indices <- c("High" = 1, "Low" = 2)
+  from_index <- state_indices[from_state]
+  to_index <- state_indices[to_state]
+  
+  transition_probs <- numeric(m)
+  
+  current_matrix <- trans_matrix
+  for (i in 1:m) {
+    transition_probs[i] <- current_matrix[from_index, to_index]
+    current_matrix <- current_matrix %*% trans_matrix
+  }
+  
+  return(transition_probs)
+}
+
+#compute the 24-hours higher order probabilities
+prob_low_high_24_ma<-calc_transition_prob(trans_matrix_MA,"Low","High",24)
+prob_high_low_24_ma<-calc_transition_prob(trans_matrix_MA,"High","Low",24)
+prob_low_high_24_h<-calc_transition_prob(trans_matrix,"Low","High",24)
+prob_high_low_24_h<-calc_transition_prob(trans_matrix,"High","Low",24)
+hours <- 1:24
+
+df_ma <- data.frame(hours = rep(hours, 2),
+                    probability = c(prob_low_high_24_ma, prob_high_low_24_ma),
+                    state = rep(c("Low to High", "High to Low"), each = 24))
+df_h <- data.frame(hours = rep(hours, 2),
+                   probability = c(prob_low_high_24_h, prob_high_low_24_h),
+                   state = rep(c("Low to High", "High to Low"), each = 24))
+#graph for the MA model 
+trans_plot_ma <- ggplot(df_ma, aes(x = hours, y = probability, color = state)) +
+  geom_line(aes(linetype = state), size = 1) +  
+  scale_color_manual(values = c("Low to High" = "blue", "High to Low" = "red")) +  # Colorazione delle linee
+  scale_y_continuous(limits = c(0, 0.35)) +
+  labs(title = "",
+       x = "steps (hours)",
+       y = "") +
+  theme(legend.text = element_text(size = 12),
+        axis.title = element_text(size = 14),
+        legend.position = "bottom",
+        panel.border = element_rect(color = "black", fill = NA, size = 0.15),
+        axis.text = element_text(size = 12))  # Ingrandisci i valori dell'asse
+
+# graph for the hourly model
+trans_plot_h <- ggplot(df_h, aes(x = hours, y = probability, color = state)) +
+  geom_line(aes(linetype = state), size = 1) +  
+  scale_color_manual(values = c("Low to High" = "blue", "High to Low" = "red")) +  # Colorazione delle linee
+  scale_y_continuous(limits = c(0, 0.35)) +
+  labs(title = "",
+       x = "steps (hours)",
+       y = "Higher order probability") +  
+  theme(legend.text = element_text(size = 12),
+        axis.title = element_text(size = 14),
+        legend.position = "bottom",
+        panel.border = element_rect(color = "black", fill = NA, size = 0.15),
+        axis.text = element_text(size = 12))  # Ingrandisci i valori dell'asse
+
+grid.arrange(trans_plot_h, trans_plot_ma, ncol = 2)
+
+```
+
+
+To analyze the probability of seeing a state change in the following hours, we decided to compute the higher order transition probability of going from the Low to the High state and viceversa in a fixed number of steps, as shown in Figure 3. Once again, the MA model displays more stable states, as the higher order probabilities increase at a slower rate. For both models, it is evident that it takes significantly less to move from High to Low than viceversa.
+
+### 5. HMM States Decoding  
+Having estimated the parameters for the two states of our Hidden Markov Model, in Figure 4 we plot the estimated state for each point in time together with its associated estimated standard deviation, for both models.
+
+```{r,warning=FALSE,echo=FALSE}
+#Decoding of Hourly Data HMM
+estStates <- posterior(fmodel)
+
+estMean1=fmodel@response[[1]][[1]]@parameters$coefficients 
+estMean2=fmodel@response[[2]][[1]]@parameters$coefficients 
+estMeans=rep(estMean1, length(station_96$pm25)) 
+estMeans[estStates[,1]==2]=estMean2
+
+sigma1=Parameters[2,1]
+sigma2=Parameters[4,1]
+
+estSigma=rep(sigma1, length(station_96$pm25)) 
+estSigma[estStates[,1]==2]=sigma2
+
+
+estMeans_full<- data.frame(datetime=station_96$datetime,pm25=station_96$pm25,estMeans,estSigma,state=estStates[,1])
+
+```
+
+```{r,warning=FALSE,echo=FALSE}
+#Decoding of MA Data HMM
+estStatesMA <- posterior(fmodelMA)
+
+estMean1MA <- fmodelMA@response[[1]][[1]]@parameters$coefficients 
+estMean2MA <- fmodelMA@response[[2]][[1]]@parameters$coefficients 
+
+estMeansMA <- rep(estMean1MA, length(station_96$pm25MA)) 
+estMeansMA[estStatesMA[,1] == 2] <- estMean2MA
+
+sigma1_MA <- ParametersMA[2,1]
+sigma2_MA <- ParametersMA[4,1]
+
+estSigma_MA <- rep(sigma1_MA, length(station_96$pm25MA)) 
+estSigma_MA[estStatesMA[,1] == 2] <- sigma2_MA
+
+estMeans_full_MA <- data.frame(datetime = station_96$datetime, pm25MA = station_96$pm25MA, estMeansMA, estSigma_MA, state = estStatesMA[,1])
+
+```
+
+```{r,echo=FALSE,fig.height=6,fig.width=17, fig.cap="${PM}_{2.5}$ Levels and State fitted mean values - Hourly data (left) and Moving Average (right)",warning=FALSE,message=FALSE}
+scale_dec1 <- function(x) sprintf("%.0f", x) #change decimals in scale
+
+#Plot with states changes (hourly)
+
+get_legend <- function(myggplot){
+  tmp <- ggplot_gtable(ggplot_build(myggplot))
+  leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+  legend <- tmp$grobs[[leg]]
+  return(legend)
+}
+
+obs_plot_h <- ggplot(estMeans_full, aes(x=datetime)) +
+  geom_line(aes(y = pm25, colour="pm2.5")) + 
+  geom_point(aes(y = estMeans, colour="HMM estimated mean"), shape= 16, size=0.8) +
+  geom_ribbon(data=estMeans_full,aes(ymin=estMeans - estSigma,ymax= estMeans + estSigma, fill ="std deviation"),alpha=0.4) +
+  annotate(geom="text", x=as.POSIXct("2020-06-23 23:00:00 UTC"), y=28, size = 6, label=as.character(expression("Dangerous PM"[2.5]*" level")), parse=TRUE, color="darkred") +
+  scale_colour_manual(breaks = c("pm2.5", "HMM estimated mean"),values = c("black", "blue"),labels=c("pm2.5",expression(hat(mu))))+scale_fill_manual(breaks="std deviation",values="grey40",labels = expression(hat(sigma)))+ scale_y_continuous(labels=scale_dec1) + xlab("") + ylab(expression(PM[2.5]))+
+  geom_hline(yintercept=25, color="darkred") + 
+  scale_x_datetime(expand=c(0,0)) +
+  labs(x=NULL) + theme(legend.position="bottom",axis.title=element_text(size=20),axis.text=element_text(size=15), legend.title = element_blank(), legend.text = element_text(size = 13), legend.direction = "horizontal") + labs(colour = "")+labs(fill="")+theme_bw()
+
+
+#Plot with states changes (moving average)
+obs_plot_MA <- ggplot(estMeans_full_MA, aes(x=datetime)) +
+  geom_line(aes(y = pm25MA, colour="pm25 - Moving Average 24h")) + 
+  geom_point(aes(y = estMeansMA, colour="HMM estimated mean"), shape= 16, size=0.6) +
+  geom_ribbon(data=estMeans_full_MA,aes(ymin=estMeansMA-estSigma_MA,ymax=estMeansMA+estSigma_MA,fill="std deviation"),alpha=0.4)+
+  annotate(geom="text", x=as.POSIXct("2020-06-23 23:00:00 UTC"), y=26.5, size = 6, label=as.character(expression("Dangerous PM"[2.5]*" level")), parse=TRUE, color="darkred") +
+  scale_colour_manual(breaks = c("pm25 - Moving Average 24h", "HMM estimated mean"),values = c("black", "blue"), labels=c("pm25 - Moving Average 24h", expression(hat(mu))))+scale_fill_manual("",breaks="std deviation",values="grey40",labels = expression(hat(sigma)))+ scale_y_continuous(labels=scale_dec1) + xlab("") + ylab(NULL) +
+  geom_hline(yintercept=25, color="darkred") + 
+  scale_x_datetime(expand=c(0,0)) +
+  labs(x=NULL) + theme(legend.position="bottom", axis.title=element_text(size=20),axis.text=element_text(size=15), legend.title = element_blank(), legend.text = element_text(size = 13),legend.direction = "horizontal") + labs(colour = "")+theme_bw()
+
+legend <- get_legend(obs_plot_h)
+
+# Combine the plots without the duplicated legend
+combined_plots <- grid.arrange(obs_plot_h + theme(legend.position="bottom", axis.text.y = element_text(size = 16),axis.text.x = element_text(size = 15),text = element_text(size = 20)), obs_plot_MA + theme(legend.position="bottom", axis.text.y = element_text(size = 16),axis.text.x = element_text(size = 15),text = element_text(size = 20)), ncol = 2)
+
+
+```
+
+As expected, the models are quite similar in terms of decoding as they both assign predominantly a Low state to the period before August, and then assign a high state to match the peak periods seen from August onward. Interestingly, for both models, the peaks touched in August and September seem to represent unprecedented conditions in terms of magnitude, since they fall significantly outside the shadow cast by the High state's estimated standard deviation. Again we highlight the higher instability of the hourly model.
+Lastly, we underline that in the hourly model the high state $PM_{2.5}$ level is above the critical threshold, whereas in the MA one it is barely below.
+
+
+### 6. DLM Specification and online forecasting
+In order to make online predictions using the streaming data we need to implement a DLM and to do this we apply a series of improvements to our specification. Initially, we transform our data applying a logarithmic transformation and then take a 12-hours coarse average. By doing this, we get rid of some of the excess noise and have a measure that, from a policy perspective, is more insightful as being above the threshold for 12 hours has stronger consequence on health than for a single hour.
+Subsequently, we fitted a Dynamic Linear Model (DLM) to the transformed data from station 96. The model utilized is a random walk plus noise, which can be expressed as:
+\medskip
+$$
+\begin{cases}
+\begin{aligned}
+Y_t &=  \theta_t + v_t, \quad & v_t  \overset{iid}\sim N(0, \sigma_v^2) \\
+\theta_t &=  \theta_{t-1} + w_t, \quad & w_t \overset{iid}\sim N(0,\sigma_w^2 ) 
+\end{aligned}
+\end{cases}
+$$
+
+The relevant parameters, namely $\sigma_v^2$ (measurement error variance) and $\sigma_w^2$ (evolution error variance), were estimated through Maximum Likelihood Estimation (MLE). The results of the optimization algorithm are presented in Table 8. It's noteworthy that the process exhibits a high signal-to-noise ratio.
+\medskip
+```{r, out.width="80%", results='asis', fig.cap="One step ahead forecast",echo=FALSE, message=FALSE, warning=FALSE}
+
+#We transform the data as a coarse 12-hours average to the log of the data of pm25 (we have assembled a function for it)
+
+transformStationData <- function(station_data) {
+  zoo_datetime <- zoo(station_data$datetime)
+  step <- 12 * 60 * 60  
+  start_time <- min(zoo_datetime)
+  end_time <- max(zoo_datetime)
+  Time <- seq(start_time, end_time, by = step)
+  Time <- as.POSIXct(Time, origin = "1970-01-01")
+  station_data$log_pm25 <- log(station_data$pm25)
+  log_pm25_mean <- numeric(length(Time))
+  
+  for (i in seq_along(Time)) {
+    if (i == length(Time)) {
+      log_pm25_mean[i] <- mean(station_data$log_pm25[zoo_datetime >= Time[i]])
+    } else {
+      log_pm25_mean[i] <- mean(station_data$log_pm25[zoo_datetime >= Time[i] & zoo_datetime < Time[i+1]])
+    }
+  }
+  new_station_data <- as.ts(log_pm25_mean)
+  
+  return(list(new_station_data = new_station_data, Time = Time))
+}
+
+
+#we transform the pm25 data of station96 as well as the time variable
+station96_new <- transformStationData(station_96)$new_station_data
+Time<-transformStationData(station_96)$Time  
+
+#setting up the MLE procedure
+buildrw <- function(param){
+    dlmModPoly(order=1, dV = param[1], dW = param[2], m0=station96_new[1])}
+
+outMLE <- dlmMLE(station96_new, parm = rep(100, 2), buildrw,lower=c(0.00001, 0), hessian = TRUE)
+
+
+AsymCov=solve(outMLE$hessian) 
+SE=sqrt(diag(AsymCov)) #MLE SE
+MLE_data=data.frame(outMLE$par, SE)
+# table for SE and ML estimates
+colnames(MLE_data) <- c("Parameter Estimate", "Standard Error")
+rownames(MLE_data) <- c("$\\sigma_v^2$", "$\\sigma_w^2$")
+knitr::kable(MLE_data, format = "latex", caption = "Maximum Likelihood Estimates and Standard Errors",row.names = TRUE, escape=FALSE,position = "!h")
+
+
+
+
+```
+
+Its effect is clearly visible in Figure 5 (left). The one step ahead predictions very much resemble the data path given the high degree of significance assigned by the Kalman filter equations to the observations. Moreover, the CI highlights how, for most of the data points predicted to be below the critical level, the distribution of our one-step ahead forecast lies mainly below the dangerous level. This is excellent as it means that, even if our point forecast is incorrect, we rarely would be predicting a low-threat situation when in reality there is danger of high pollution.
+\medskip
+```{r,out.width="60%",out.height="50%",results='asis', fig.cap="One step ahead forecasts for station 96" ,fig.align="center",echo=FALSE, message=FALSE, warning=FALSE}
+
+#Model building 
+S96Mod <- buildrw(outMLE$par)
+outFilter =dlmFilter(station96_new,S96Mod)
+outSmooth=dlmSmooth(station96_new, S96Mod)
+
+#Extracting forecasting, filtering and smoothed etimates
+listC <- dlmSvd2var(outFilter$U.C, outFilter$D.C) #filtered variances
+sqrtC=sqrt(unlist(listC)) #filtered std errors
+listR <- dlmSvd2var(outFilter$U.R, outFilter$D.R) #forecast (one step ahead) variances
+listQ <- lapply(listR, function(x) x + outMLE$par[1])
+sqrtQ=sqrt(unlist(listQ)) #forecast (one step ahead) std errors
+listS <- dlmSvd2var(outSmooth$U.S, outSmooth$D.S) #smoothed variances
+sqrtS=sqrt(unlist(listS)) #smoothed std errors
+filterEstimates=outFilter$m[-1] #filtered means
+smoothEstimates=outSmooth$s[-1] #soothed means
+fForecasts = outFilter$f #one step ahead forecasts
+
+#95% CI
+f_lwr =fForecasts + qnorm(0.025)*sqrtQ #95% CI
+f_upr =fForecasts + qnorm(0.975)*sqrtQ 
+
+
+dlm96=data.frame(Time, station96_new ,filterEstimates, smoothEstimates, fForecasts,f_lwr, f_upr)
+
+scale_dec <- function(x) sprintf("%.1f", x)
+
+plot_pm25_forecasts <- ggplot(dlm96, aes(x = Time)) + 
+  geom_line(aes(y = station96_new, colour = "Log PM"), size = 0.3) + 
+  geom_line(aes(y = fForecasts, colour = "One-step ahead forecast"), size = 0.4) +
+  scale_colour_manual("", values = c("black", "red1"), breaks = c("Log PM", "One-step ahead forecast")) +
+  geom_ribbon(aes(ymin = f_lwr, ymax = f_upr, fill = "95% Online forecast credible interval"), alpha = 0.4) +
+  scale_fill_manual("", values = "grey60", breaks = "95% Online forecast credible interval") + 
+  xlab("") + 
+  ylab(expression(PM[2.5])) + 
+  scale_y_continuous(labels = scale_dec) + 
+  ylim(2, 4.3) + 
+  theme(legend.text = element_text(size = 12),axis.title = element_text(size = 14),legend.position = "bottom", panel.border = element_rect(color = "black", fill = NA, size = 0.15),axis.text=element_text(size=15)) +
+  geom_hline(yintercept = log(25), color = "darkred", size = 0.25) +
+  annotate(geom = "text", x = as.POSIXct("2020-06-29"), y = log(25) + 0.1, 
+           label = expression("Dangerous PM"[2.5]*" level"), size = 4, color = "darkred") +
+  guides(colour = guide_legend(nrow = 2, byrow = TRUE), fill = guide_legend(nrow = 2, byrow = TRUE)) +
+  scale_x_datetime(expand = c(0, 0))
+
+```
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE, fig.height=6,fig.width=17, fig.cap="One step ahead forecasts for station 96 (right) - Map of the four stations(left)" }
+
+
+#now we proceed computing the distances between the station (in kmeters) using the haversine formula which takes into account the spherical shape of the earth
+
+# Coupling the longitude and latitude for each station
+coordinates <- list(
+  cbind(station_41$Longitude[1], station_41$Latitude[1]),
+  cbind(station_47$Longitude[1], station_47$Latitude[1]),
+  cbind(station_96$Longitude[1], station_96$Latitude[1]),
+  cbind(station_99$Longitude[1], station_99$Latitude[1])
+)
+
+
+# Constucting the matrix of distances (in kmeters)
+distances <- matrix(NA, nrow = length(coordinates), ncol = length(coordinates))
+for (i in 1:length(coordinates)) {
+  for (j in 1:length(coordinates)) {
+    distances[i, j] <- distHaversine(coordinates[[i]], coordinates[[j]])/1000
+  }
+}
+colnames(distances) <- c("station_41", "station_47", "station_96", "station_99")
+rownames(distances) <- c("station_41", "station_47", "station_96", "station_99")
+
+
+
+# Coordinates of cities
+cities <- data.frame(
+  city = c("San Francisco", "Las Vegas"),
+  Longitude = c(-122.4194, -115.1398),  # Longitudine
+  Latitude = c(37.7749, 36.1699)           # Latitudine
+)
+
+stations <- data.frame(
+  station = c("Station 41", "Station 47", "Station 96", "Station 99"),
+  Longitude = c(station_41$Longitude[1], station_47$Longitude[1], 
+                 station_96$Longitude[1], station_99$Longitude[1]),
+  Latitude = c(station_41$Latitude[1], station_47$Latitude[1], 
+                station_96$Latitude[1], station_99$Latitude[1])
+)
+
+cities_sf <- st_as_sf(cities, coords = c("Longitude", "Latitude"), crs = 4326)
+stations_sf <- st_as_sf(stations, coords = c("Longitude", "Latitude"), crs = 4326)
+
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+#plot of the map of california with stations and cities (not displayed in the report)
+map<-ggplot() +
+  geom_sf(data = world) +
+  geom_sf(data = stations_sf, aes(color = station), size = 3) +
+  geom_sf(data = cities_sf, color = "black", size = 1) +
+  geom_text(data = cities, aes(x = Longitude - 0.5, y = Latitude, label = city), size = 5, hjust = 1, vjust = -0.5) +
+  theme_void() +
+  theme(legend.position = "bottom",
+        legend.title = element_text(size = 10),  
+        legend.text = element_text(size = 10),   
+        legend.key.size = unit(0.5, "cm"), plot.margin = unit(c(0, 0, 0, 0), "cm")) +      
+  labs(color = "Stations") +
+  scale_color_manual(values = c("gold", "#00FFFF", "green", "#F778A1"), 
+                     breaks = c("Station 41", "Station 47", "Station 96", "Station 99"),
+                     labels = c("Station 41", "Station 47", "Station 96", "Station 99")) +
+  coord_sf(xlim = c(-125, -115), ylim = c(35, 39))
+
+```
+
+```{r,fig.height=6,fig.width=17 ,results='asis', fig.cap="One step ahead forecasts for station 96 (left) - ${PM}_{2.5}$ Levels across stations (right)" ,fig.align="center",echo=FALSE, message=FALSE, warning=FALSE}
+#we now proceed in modifying the pm25 data for the other stations as a 24-hours coarse average
+station41_new <- transformStationData(station_41)$new_station_data
+station47_new <- transformStationData(station_47)$new_station_data
+station99_new <- transformStationData(station_99)$new_station_data
+
+stations_frame<- data.frame(Time, station41_new,station47_new,station96_new,station99_new)
+
+# Graph for the transformed data of all 4 stations
+plot_all_stat <- ggplot() +
+  geom_line(data = stations_frame, aes(x = Time, y = station41_new, color = "Station 41")) +
+  geom_line(data =stations_frame, aes(x = Time, y = station47_new, color = "Station 47")) +
+  geom_line(data = stations_frame, aes(x = Time, y = station96_new, color = "Station 96")) +
+  geom_line(data = stations_frame, aes(x = Time, y = station99_new, color = "Station 99")) +
+  scale_color_manual("", values = c("blue", "goldenrod1","red", "forestgreen"), breaks = c("Station 41", "Station 47","Station 96", "Station 99")) +
+  labs(x = "", y = "", color = "Station ID") +
+  theme(legend.text = element_text(size = 11),legend.position="bottom",axis.text=element_text(size=15), axis.title.y = element_text(size = 14), panel.border = element_rect(color = "black", fill = NA, size = 0.15))
+
+grid.arrange(plot_pm25_forecasts,plot_all_stat, ncol=2)
+```
+### 7. Introduction to spatial dependence
+To model the different stations jointly we decided to check whether the spatial dimension plays a relevant role in explaining the evolution of the pollution level. By this we mean whether, when a shock hits a specific area, it will propagate in space and influence the amount of air pollution detected from the various stations, differently according to the distance they are from the shock (i.e. closer stations see a stronger effect).
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#we calculate the correlation coefficient for the station grouped for the lower distance
+correlation_41_47 <- cor(station_41$pm25, station_47$pm25)
+correlation_96_99 <- cor(station_96$pm25, station_99$pm25)
+correlation_41_99 <- cor(station_41$pm25, station_99$pm25)
+correlation_47_96 <- cor(station_47$pm25, station_96$pm25)
+
+```
+
+Looking at the stations'${PM}_{2.5}$ levels they seem to show very similar movements. In particular, the evolution is similar for close stations: 41 and 47 evolve similarly and 96 and 99 as well (see Figure 5 on the right). In fact stations 96 and 99 are located in close proximity to Las Vegas (Nevada) and the distance between them is just of roughly 14 km. On the other hand 50 km separates stations 41 and 47 which are situated on the eastern side of San Francisco Bay Area (California). To give an idea stations 41 and 99 are located 560 km apart, in fact, the evolution of $PM_{2.5}$ for these stations is remarkably different. 
+
+### 8. Spatial DLM specification
+Having analyzed the relevance of the spatial dimension for our data we proceed in implementing a joint spatial-temporal model which includes data from the four stations. The model looks as below:
+$$
+\begin{cases}
+\begin{aligned}
+Y_t &= F \theta_t + v_t, \quad & v_t  \overset{indep}\sim N_4(\textbf{0}, V) \\
+\theta_t &= G \theta_t + w_t, \quad & w_t \overset{indep}\sim N_4(\textbf{0}, W) 
+\end{aligned}
+\end{cases}
+$$
+Where $Y_t=(Y_{t,j=41},Y_{t,j=47},Y_{t,j=96},Y_{t,j=99})'$ is the vector of ${PM}_{2.5}$ data for our stations each evolving according to a random walk plus noise with underlying state process $\theta_{t,j}$.
+The $F$ and $G$ matrices are both identity matrices of the fourth order; instead the $V$ matrix is a diagonal matrix that includes the measurement error variances for each station ($\sigma^2_{v,i}$). On the other hand the evolution errors are spatially dependent. The structure of the $W$ matrix is the following: $W[j,i]=Cov(w_{j,t},w_{i,t})=\sigma^2exp(-\phi D[j,i])$. Where $\sigma^2$ is the common evolution variance, meanwhile the evolution covariances, which express spatial dependence, decrease with the distance across stations($D[j,i]$) according to a decaying parameter $\phi$. We end up with 6 paramaters to estimate by MLE.
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#we fit 3 additional dlm's to extract parameters for the initialization of the optimization algorithm
+
+buildrw_41 <- function(param){
+    dlmModPoly(order=1, dV = param[1], dW = param[2], m0=station41_new[1])}
+buildrw_47 <- function(param){
+    dlmModPoly(order=1, dV = param[1], dW = param[2], m0=station47_new[1])}
+buildrw_99 <- function(param){
+    dlmModPoly(order=1, dV = param[1], dW = param[2], m0=station99_new[1])}
+
+#extracting MLE's
+outMLE_41 <- dlmMLE(station41_new, parm = rep(100, 2), buildrw_41,lower=c(0.00001, 0), hessian = TRUE)
+
+outMLE_47 <- dlmMLE(station47_new, parm = rep(100, 2), buildrw_47,lower=c(0.00001, 0), hessian = TRUE)
+
+outMLE_99 <- dlmMLE(station99_new, parm = rep(100, 2), buildrw_99,lower=c(0.00001, 0), hessian = TRUE)
+
+
+
+params_41 <- outMLE_41$par
+params_47 <- outMLE_47$par
+params_99 <- outMLE_99$par
+params <- outMLE$par
+
+# Measurement error variances (dV)
+dV_41 <- params_41[1]
+dV_47 <- params_47[1]
+dV_99 <- params_99[1]
+dv <- params[1]
+
+#evolutions errors
+dW_41<-params_41[2]
+dW_47<-params_47[2]
+dW_99<-params_99[2]
+dW <- params[2]
+
+
+#we create an initial value for the evolution error by taking the straight mean of the values generated by the univariate models
+dW_mod<-(dW_41+dW_47+dW_99+dW)/4
+
+```
+
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+pm25_dlm_data<-ts.union(station41_new,station47_new,station96_new,station99_new)
+#  DLM model
+buildrw <- function(params) {
+  # parameters
+  # (params[1:4] = measurement errors variances)
+  # (params[5] = hidden process' variance)
+  # (params[6] = decaying parameter phi)
+  dlmMod <- dlmModPoly(1)
+  dlmMod$FF=diag(4)
+  dlmMod$GG=diag(4) 
+  V1=matrix(0, nrow = 4, ncol = 4)   #matrix of ind. measurement errors
+  diag(V1) <- params[1:4]
+  dlmMod$V<- V1
+  dlmMod$W=params[5] * exp(-params[6] * distances)  #matrix of spacial evolution errors
+  dlmMod$m0=pm25_dlm_data[1,] 
+  dlmMod$C0=diag(4) * 100
+  return(dlmMod)
+}
+
+
+```
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+#we use as initial values for the numerical optimization the estimates  produced by the univariate models for the 4 stations
+outMLE_all<-dlmMLE(pm25_dlm_data, parm = c(dV_41,dV_47,dv,dV_99,dW_mod,0.1), buildrw ,lower=rep(0.0001, 6), hessian = TRUE)
+dlmMod_all<-buildrw(outMLE_all$par)
+
+V<-dlmMod_all$V
+W<-dlmMod_all$W
+```
+
+```{r,echo=FALSE, eval=FALSE}
+#funvtion to extrac W and V
+bmatrix = function(x, digits=NULL, ...) {
+  library(xtable)
+  default_args = list(include.colnames=FALSE, only.contents=TRUE,
+                      include.rownames=FALSE, hline.after=NULL, comment=FALSE,
+                      print.results=FALSE)
+  passed_args = list(...)
+  calling_args = c(list(x=xtable(W, digits=5)),  #change in V for V matrix
+                   c(passed_args,
+                     default_args[setdiff(names(default_args), names(passed_args))]))
+  cat("\\begin{bmatrix}",
+      do.call(print.xtable, calling_args),
+      "\\end{bmatrix}")
+}
+bmatrix(x)
+```
+### 9. Estimation and forecasting
+As a starting point for the numerical optimization algorithm, we have used the estimates of the parameters (i.e. the four measurement error variances and the evolution variance) generated by four univariate DLM's each fitting a single station's data. For the measurement error variances, we took each model's estimate, while for the common evolution variance, we computed a mean of the four estimates. Below are the estimates of $V$ and $W$.
+\medskip
+\[
+V=\begin{bmatrix}  0.00993 & 0.00000 & 0.00000 & 0.00000 \\ 
+  0.00000 & 0.01205 & 0.00000 & 0.00000 \\ 
+  0.00000 & 0.00000 & 0.00010 & 0.00000 \\ 
+  0.00000 & 0.00000 & 0.00000 & 0.00244 \\ 
+   \end{bmatrix}
+   ,\quad W=\begin{bmatrix}  0.03047 & 0.02740 & 0.00932 & 0.00923 \\ 
+  0.02740 & 0.03047 & 0.01024 & 0.01014 \\ 
+  0.00932 & 0.01024 & 0.03047 & 0.02959 \\ 
+  0.00923 & 0.01014 & 0.02959 & 0.03047 \\ 
+   \end{bmatrix}\]
+
+Comparing the results with the univariate DLM (for station 96), it is evident how the latter estimates a lower value of the evolution variance with respect to the multivariate model. We deem more accurate the multivariate estimate since the underlying model includes data for the four stations and the spatial dimension which, as we have discussed, is relevant to model $PM_{2.5}$.
+Interestingly, observing the estimated measurement error variance, we note that the stations located in California display higher values than the ones in Nevada. In particular, station 96 has a very low estimated measurement error variance. To further evaluate this aspect we would need more information about the measurement techniques deployed by the various stations, but it is reasonable to assume that stations located in different states (and in particular with a different proximity to major urban centers) might be equipped with different technologies to detect ${PM}_{2.5}$.
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+
+#extracting the filtering and smoothing data
+outFilter_sp =dlmFilter(pm25_dlm_data,dlmMod_all)
+outSmooth_sp=dlmSmooth(pm25_dlm_data, dlmMod_all)
+
+#we now manipulate a bit the variables to have the data as we like them
+
+#filtering
+filtered_means<-outFilter_sp$m[-1,]
+colnames(filtered_means)<-c("m41","m47","m96","m99")
+listC <- dlmSvd2var(outFilter_sp$U.C, outFilter_sp$D.C)
+
+C41_t <- sapply(listC, "[", 1, 1)
+C47_t <- sapply(listC, "[", 2, 2)
+C96_t <- sapply(listC, "[", 3, 3)
+C99_t <- sapply(listC, "[", 4, 4)
+
+sqrtC=data.frame(sqrt(C41_t), sqrt(C47_t), sqrt(C96_t),sqrt(C99_t))
+lwr_filt<-filtered_means + qnorm(0.025)*sqrtC[-1,]
+colnames(lwr_filt)<-c("lwr41","lwr47","lwr96","lwr99")
+upr_filt<-filtered_means + qnorm(0.925)*sqrtC[-1,]
+colnames(upr_filt)<-c("upr41","upr47","upr96","upr99")
+
+#observation forecasting
+
+forecast_means<-outFilter_sp$f
+colnames(forecast_means)<-c("f41","f47","f96","f99")
+
+listR <- dlmSvd2var(outFilter_sp$U.R, outFilter_sp$D.R)
+listQ <- lapply(listR, function(R) R + dlmMod_all$V) #we augment every variance-covariance matrix with the one of the measurement errors to account for the higher uncertainty of the observations
+
+
+Q41_t <- sapply(listQ, "[", 1, 1)
+Q47_t <- sapply(listQ, "[", 2, 2)
+Q96_t <- sapply(listQ, "[", 3, 3)
+Q99_t <- sapply(listQ, "[", 4, 4)
+
+sqrtC=data.frame(sqrt(Q41_t), sqrt(Q47_t), sqrt(Q96_t),sqrt(Q99_t))
+lwr_for<-forecast_means + qnorm(0.025)*sqrtQ
+colnames(lwr_for)<-c("lwr41_f","lwr47_f","lwr96_f","lwr99_f")
+upr_for<-forecast_means + qnorm(0.925)*sqrtQ
+colnames(upr_for)<-c("upr41_f","upr47_f","upr96_f","upr99_f")
+
+#smoothing
+smoothed_means<-outSmooth_sp$s[-1,]
+colnames(smoothed_means)<-c("s41","s47","s96","s99")
+listS <- dlmSvd2var(outSmooth_sp$U.S, outSmooth_sp$D.S)
+S41_t <- sapply(listS, "[", 1, 1)
+S47_t <- sapply(listS, "[", 2, 2)
+S96_t <- sapply(listS, "[", 3, 3)
+S99_t <- sapply(listS, "[", 4, 4)
+
+sqrtS=data.frame(sqrt(S41_t), sqrt(S47_t), sqrt(S96_t),sqrt(S99_t))
+lwr_smooth<-smoothed_means + qnorm(0.025)*sqrtS[-1,]
+colnames(lwr_smooth)<-c("lwr41_s","lwr47_s","lwr96_s","lwr99_s")
+upr_smooth<-smoothed_means + qnorm(0.925)*sqrtS[-1,]
+colnames(upr_smooth)<-c("upr41_s","upr47_s","upr96_s","upr99_s")
+
+
+#we now proceed in creating a dataset for each station containing the filtering, forecasting and smoothing data
+
+
+data_merged <- data.frame(
+  filtered_means = filtered_means,
+  lwr_filt = lwr_filt,
+  upr_filt = upr_filt,
+  forecast_means = forecast_means,
+  lwr_for = lwr_for,
+  upr_for = upr_for,
+  smoothed_means = smoothed_means,
+  lwr_smooth = lwr_smooth,
+  upr_smooth = upr_smooth
+)
+
+
+# station 41
+data_41 <- data.frame(
+  Time = Time,
+  station = "41",
+  Y=station41_new,
+  filtered_means = filtered_means[, "m41"],
+  lwr_filt = lwr_filt[, "lwr41"],
+  upr_filt = upr_filt[, "upr41"],
+  forecast_means = forecast_means[, "f41"],
+  lwr_for = lwr_for[, "lwr41_f"],
+  upr_for = upr_for[, "upr41_f"],
+  smoothed_means = smoothed_means[, "s41"],
+  lwr_smooth = lwr_smooth[, "lwr41_s"],
+  upr_smooth = upr_smooth[, "upr41_s"]
+)
+
+# station 47
+data_47 <- data.frame(
+  Time = Time,
+  station = "47",
+  Y=station47_new,
+  filtered_means = filtered_means[, "m47"],
+  lwr_filt = lwr_filt[, "lwr47"],
+  upr_filt = upr_filt[, "upr47"],
+  forecast_means = forecast_means[, "f47"],
+  lwr_for = lwr_for[, "lwr47_f"],
+  upr_for = upr_for[, "upr47_f"],
+  smoothed_means = smoothed_means[, "s47"],
+  lwr_smooth = lwr_smooth[, "lwr47_s"],
+  upr_smooth = upr_smooth[, "upr47_s"]
+)
+
+# station 96
+data_96 <- data.frame(
+  Time = Time,
+  station = "96",
+  Y=station96_new,
+  filtered_means = filtered_means[, "m96"],
+  lwr_filt = lwr_filt[, "lwr96"],
+  upr_filt = upr_filt[, "upr96"],
+  forecast_means = forecast_means[, "f96"],
+  lwr_for = lwr_for[, "lwr96_f"],
+  upr_for = upr_for[, "upr96_f"],
+  smoothed_means = smoothed_means[, "s96"],
+  lwr_smooth = lwr_smooth[, "lwr96_s"],
+  upr_smooth = upr_smooth[, "upr96_s"]
+)
+
+# station 99
+data_99 <- data.frame(
+  Time = Time,
+  station = "99",
+  Y=station99_new,
+  filtered_means = filtered_means[, "m99"],
+  lwr_filt = lwr_filt[, "lwr99"],
+  upr_filt = upr_filt[, "upr99"],
+  forecast_means = forecast_means[, "f99"],
+  lwr_for = lwr_for[, "lwr99_f"],
+  upr_for = upr_for[, "upr99_f"],
+  smoothed_means = smoothed_means[, "s99"],
+  lwr_smooth = lwr_smooth[, "lwr99_s"],
+  upr_smooth = upr_smooth[, "upr99_s"]
+)
+
+
+```
+
+
+```{r,fig.height=6,fig.width=17 ,results='asis', fig.cap="${PM}_{2.5}$ Levels, forecast and smoothed processes for station 41 (left) and 47 (right)" ,fig.align="left",echo=FALSE, message=FALSE, warning=FALSE}
+#plots with filtered and smoothed data
+#plot function
+create_station_plot <- function(data) {
+  scale_dec <- function(x) sprintf("%.1f", x)
+  p <- ggplot(data, aes(x = Time)) + 
+    geom_line(aes(y = Y, colour = "Log PM"), size = 0.3) + 
+    geom_line(aes(y = forecast_means, colour = "One-step ahead forecast"), size = 0.4) +
+    geom_line(aes(y = smoothed_means, colour = "Smoothed process"), size = 0.4)+
+    scale_colour_manual("", values = c("black", "red1", "orange"), breaks = c("Log PM", "One-step ahead forecast", "Smoothed process")) +
+    geom_ribbon(aes(ymin = lwr_for, ymax = upr_for, fill = "95% Online forecast credible interval"), alpha = 0.4) +
+    scale_fill_manual("", values = "grey60", breaks = "95% Online forecast credible interval") + 
+    xlab("") + 
+    ylab(expression(PM[2.5])) + 
+    scale_y_continuous(labels = scale_dec) + 
+    ylim(2, 5.2) + 
+    theme(legend.text = element_text(size = 12),axis.title = element_text(size = 14),legend.position = "bottom", panel.border = element_rect(color = "black", fill = NA, size = 0.15)) +
+    geom_hline(yintercept = log(25), color = "darkred", size = 0.25) +
+    annotate(geom = "text", x = as.POSIXct("2020-06-18"), y = log(25) + 0.1, 
+             label = expression("Dangerous PM"[2.5]*" level"), size = 5, color = "darkred") +
+    guides(colour = guide_legend(nrow = 2, byrow = TRUE), fill = guide_legend(nrow = 2, byrow = TRUE)) +
+    scale_x_datetime(expand = c(0, 0))
+  
+  return(p)
+}
+
+plot_41 <- create_station_plot(data_41)
+plot_47 <- create_station_plot(data_47)
+
+legend_2 <- get_legend(plot_47)
+
+```
+
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+combined_plots_2 <- grid.arrange(plot_41 + theme(legend.position="none", axis.text.y = element_text(size = 16),axis.text.x = element_text(size = 15),text = element_text(size = 20)), plot_47 + theme(legend.position="none",ylab=(""),axis.text.y = element_text(size = 15),axis.text.x = element_text(size = 15),text = element_text(size = 20)), ncol = 2)
+```
+
+To visualize the outcome provided by the model, Figure 6 displays both the one-step ahead forecasts and the smoothed process for stations 41 and 47. As mentioned in the introduction, we see that these stations (which are close to San Francisco) have detected abnormally high values in the late summer in correspondence of the extreme conditions they faced.
+```{r,fig.height=6,fig.width=17 ,results='asis', fig.cap="${PM}_{2.5}$ Levels, forecast and smoothed porcesses for station 41 (left) and 47 (right)" ,fig.align="left",echo=FALSE, message=FALSE, warning=FALSE}
+grid.arrange(combined_plots_2, legend_2 , ncol = 1, heights = unit(c(0.9, 0.2), c("npc", "npc")))
+```
+To make a comparison with the univariate DLM, Figure 7 plots the data for station 96; as mentioned above, the filtering and smoothing procedure of the multivariate DLM for this station continues to resemble very closely the actual data, given that the spatial model assigns a very high signal-to-noise ratio. However, looking at the 7-days ahead forecast and the related credible intervals, it is clear that the model cannot be relied upon for forecasting. The uncertainty of the estimate as the forecast horizon grows is increasingly large, rendering the forecast uninformative for the future state of air pollution.
+
+```{r,out.width="67%",results='asis', fig.cap="${PM}_{2.5}$ levels, one step ahead forecasts anf seven step ahead forecast for station 96" ,fig.align="center",echo=FALSE, message=FALSE, warning=FALSE}
+#7 days ahead forecast
+#we extract the 7 days ahead mean forecasts and variances
+outFor<-dlmForecast(outFilter_sp, 14)
+forecasts<-outFor$a
+colnames(forecasts)<-c("h41","h47","h96","h99")
+listR_h<-outFor$R
+R96_h <- sapply(listR_h, "[", 1, 1)
+sqrtR_h=data.frame(sqrt(R96_h))
+forecasts_96<-as.numeric(forecasts[, "h96"])
+h_lwr = forecasts_96 + qnorm(0.025)*sqrtR_h #5% CI 
+h_lwr=unlist(h_lwr)
+h_upr = forecasts_96 + qnorm(0.975)*sqrtR_h
+h_upr=unlist(h_upr)
+
+#modify our data to fit the extended time-frame
+new_Time<-seq(from=Time[1], to=ymd_hm("2020-10-07 00:00"),by="12 hours")
+forecasts_96=c(rep(NA,length(new_Time)-length(forecasts_96)),forecasts_96)
+h_lwr=c(rep(NA,length(new_Time)-length(h_lwr)),h_lwr)
+h_upr=c(rep(NA,length(new_Time)-length(h_upr)),h_upr)
+
+data_length<-length(data_96$Y)
+
+h_Y=c(data_96$Y,rep(NA,length(new_Time)-data_length))
+h_for=c(data_96$forecast_means,rep(NA,length(new_Time)-data_length))
+h_smooth=c(data_96$smoothed_means,rep(NA,length(new_Time)-data_length))
+h_forlwr=c(data_96$lwr_for,rep(NA,length(new_Time)-data_length))
+h_forupr=c(data_96$upr_for,rep(NA,length(new_Time)-data_length))
+
+#data frame containing our new variables
+forecasts96_data<-data.frame(Time=new_Time,forecasts_96,h_lwr,h_upr,h_Y,h_for,h_smooth,h_forlwr,h_forupr)
+
+#plot with 7-days ahead forecasts
+ggplot(forecasts96_data, aes(x = Time)) + 
+    geom_line(aes(y = h_Y, colour = "Log PM"), size = 0.3) + 
+    geom_line(aes(y = h_for, colour = "One-step ahead forecast"), size = 0.4) +
+    geom_line(aes(y = forecasts_96, colour = "7 days forecasts"), size = 0.4) +
+    scale_colour_manual("", values = c("black", "red", "magenta"), breaks = c("Log PM", "One-step ahead forecast", "7 days forecasts")) +
+    geom_ribbon(aes(ymin = h_forlwr, ymax = h_forupr, fill = "95% Online forecast credible interval"), alpha = 0.4) +
+    geom_ribbon(aes(ymin = h_lwr, ymax = h_upr, fill = "7 days state forecasts credible interval"), alpha = 0.3) +
+    scale_fill_manual("", values = c("grey60", "palegreen"), breaks = c("95% Online forecast credible interval", "7 days state forecasts credible interval")) + geom_hline(yintercept = log(25), color = "darkred", size = 0.25) +
+    annotate(geom = "text", x = as.POSIXct("2020-06-25"), y = log(25) + 0.1, 
+             label = expression("Dangerous PM"[2.5]*" level"), size = 3, color = "darkred") +
+    xlab("") + 
+    ylab(expression(PM[2.5])) + 
+    scale_y_continuous(labels = scale_dec) + 
+    ylim(1.5, 4.3) + 
+    theme(legend.text = element_text(size = 8), axis.title = element_text(size = 10), legend.position = "bottom", panel.border = element_rect(color = "black", fill = NA, size = 0.15)) +
+    guides(colour = guide_legend(nrow = 3, byrow = TRUE), fill = guide_legend(nrow = 3, byrow = TRUE)) +
+    scale_x_datetime(expand = c(0, 0))
+```
+
+### 10. Models comparison
+To check the assumptions of the two models, Figure 8 plots the standardized forecast errors for station 96 against the theoretical standard normal distribution. As for the univariate model, we see a significant divergence for the extreme quantiles, which are lower in the multivariate DLM. This suggests that the univariate model is characterized by more stringent assumptions; indeed by relaxing some of them (as it happens in the multivariate DLM allowing for spatial dependence) the model's assumptions seem more credible. Furthermore, the same comparison for the other stations shows improvements for both the univariate and multivariate models. This proves again the peculiarity of station 96. 
+
+```{r,fig.height=5,fig.width=17,results='asis', fig.cap="Model checking for the univariate (left) and multivariate (right) model for sation 96" ,fig.align="left",echo=FALSE, message=FALSE, warning=FALSE}
+
+#univariate model stdized residuals (st 96)
+e_96 <- residuals(outFilter, sd = FALSE)
+qq_plot_96 <- ggplot(data = NULL, aes(sample = e_96)) +     
+  stat_qq(shape = 1) + 
+  stat_qq_line() + 
+  xlab("Theoretical Quantile") + 
+  ylab("Sample Quantile") + ylim(-6,4.5)+ 
+  theme(panel.border = element_rect(color = "black", fill = NA, size = 0.15),axis.title = element_text(size = 14) )
+
+
+#multivariate model stdized residuals (st 96)
+Residuals <- residuals(outFilter_sp, sd = FALSE)
+e_96_spac<-Residuals[,"station96_new"]
+qq_plot_96_spac <- ggplot(data = NULL, aes(sample = e_96_spac)) + 
+  stat_qq(shape = 1) + 
+  stat_qq_line() + 
+  xlab("Theoretical Quantile") + 
+  ylab("") + ylim(-6,4.5)+
+  theme(panel.border = element_rect(color = "black", fill = NA, size = 0.15),axis.title = element_text(size = 14))
+
+grid.arrange(qq_plot_96,qq_plot_96_spac, ncol=2)
+
+#mape calculations for spacial dlm for station 96 and simple dlm for station 96
+MAPE_DLM_96=mean(abs(e_96/station96_new))
+MAPE_DLM_96_sp=mean(abs(e_96_spac/station96_new))
+
+ 
+```
+We confirmed the better performance of the spatial model for station 96 by computing the MAPE which for the univariate models is $\approx$ 0.22 and for the multivariate is $\approx$ 0.19.
+
+As for the criticisms, we note that the plots of the forecast errors for both DLM's models do not appear to be perfectly distributed as a standard normal. 
+Indeed, looking at the PAC, AC and the Ljung-Box tests the one step ahead forecast error seem to be correlated also with shocks at t-1 and t-2. Thus, the across-time independence of the evolution errors assumed by both models might be restrictive.
+Moreover, as discussed, assuming independent measurement errors across locations might be a myopic choice given different state regulations and different distance to major cities.
+
+
+
+### 11. Conclusions
+Summing up our findings, we deem the HMM useful for a first intuitive understanding of the different levels of pollution and their respective instability. On the other hand, the DLM's models could be used for practical applications such as nowcasting and noise reduction, given their precision in estimating the underlying process and the relatively low MAPE.
+
+Yet the DLM's lose reliability when it comes to h-step ahead forecasts. This in part has to do with the fact that we are trying to predict future values of pollution based on its lagged levels. We might improve this aspect by allowing for additional regressors chosen consulting experts and scientific literature. 
+
+We could think of different kind of relevant predictors such as demography, urbanization and climate variables, which are driven by long-term trends that are generally orthogonal to policy actions. Other factors, that can be more directly affected by public policies, might be energy and transportation efficiency. 
