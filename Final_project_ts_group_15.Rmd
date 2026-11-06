@@ -1,8 +1,8 @@
 ---
 title: "Time series: Final Project"
 author: 
-- Matteo Almici (3132333), Federico Golonia (3128604)\newline 
-- Michele Strazza (3112839), Matteo Valetto (3136576)
+- Matteo Almici, Federico Golonia\newline 
+- Michele Strazza, Matteo Valetto
 header-includes:
 - \usepackage{floatrow}
 - \usepackage{amsmath}
