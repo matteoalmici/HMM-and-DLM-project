@@ -21,6 +21,6 @@ Group project for the Time Series course (Bocconi University, MSc in Economic an
 
 The Rmd reads a CSV of EPA hourly data (`ts_epa_2020_west_sept_fill.csv`), which is not included in this repository. Set the path at the top of the Rmd before knitting. Main R packages: `depmixS4`, `dlm`, `forecast`, `astsa`, `imputeTS`, `tidyverse`, `sf`.
 
-## Author
+## Authors
 
-Matteo Almici, with classmates from group 15. [LinkedIn](https://www.linkedin.com/in/matteo-almici-matt2001/)
+Group 15: Matteo Almici, Federico Golonia, Michele Strazza and Matteo Valetto. [Matteo's LinkedIn](https://www.linkedin.com/in/matteo-almici-matt2001/)
